@@ -6,7 +6,7 @@ import scala.io.Source
 @main
 def main(): Unit = {
   val source = Source.fromFile("input.txt")
-  val text = source.getLines.toList.foldLeft("")((s1, s2) => s1.concat(s2))
+  val text = source.mkString
 
   solveA(text)
   solveB(text)
@@ -15,13 +15,13 @@ def main(): Unit = {
 }
 
 def solveA(text: String): Unit = {
-  val instructions = text.foldLeft((List.empty: List[Instruction], Searching("")))((a, b) => parseNext(a._1, a._2, b))._1
+  val instructions = text.foldLeft(Parser.init)(parse).instructions
   val result = interpretInstructionsA(instructions)
   System.out.println(result)
 }
 
 def solveB(text: String): Unit = {
-  val instructions = text.foldLeft((List.empty: List[Instruction], Searching("")))((a, b) => parseNext(a._1, a._2, b))._1
+  val instructions = text.foldLeft(Parser.init)(parse).instructions
   val result = interpretInstructionsB(instructions)
   System.out.println(result)
 }
@@ -31,19 +31,29 @@ enum Instruction:
   case Dont
   case Mul(left: Int, right: Int)
 
+sealed trait State:
+  def sum: Int
+
+object State:
+  def active: State = Active(0)
+
+case class Active(sum: Int) extends State
+case class InActive(sum: Int) extends State
+
 def interpretInstructionsA(instructions: List[Instruction]): Int =
-  instructions.foldLeft(0)((acc, instruction) => instruction match {
-    case Mul(left, right) => acc + left * right
-    case _ => acc
+  instructions.foldLeft(0)((sum, instruction) => instruction match {
+    case Mul(left, right) => + left * right
+    case _ => sum
   })
 
 def interpretInstructionsB(instructions: List[Instruction]): Int =
-  instructions.foldLeft((0, true))((acc, instruction) => instruction match {
-    case Mul(left, right) if acc._2 => acc.copy(_1 = acc._1 + left * right)
-    case Do => acc.copy(_2 = true)
-    case Dont => acc.copy(_2 = false)
-    case _ => acc
-  })._1
+  instructions.foldLeft(State.active)((state, instruction) => (state, instruction) match {
+    case (Active(sum), Mul(left, right)) => Active(sum + left * right)
+    case (InActive(sum), Do) => Active(sum)
+    case (Active(sum), Dont) => InActive(sum)
+    case _ => state
+  }).sum
+
 
 enum ParserState:
   case Searching(acc: String)
@@ -52,20 +62,26 @@ enum ParserState:
   case FactorA(acc: String)
   case FactorB(factorA: Int, acc: String)
 
-def parseNext(prevElems: List[Instruction], state: ParserState, nextLetter: Char): (List[Instruction], ParserState) =
+case class Parser(instructions: List[Instruction], state: ParserState)
+object Parser:
+  def init = Parser(List.empty, Searching(""))
+
+def parse(parser: Parser, nextLetter: Char): Parser =
+  val instructions = parser.instructions
+  val state = parser.state
   (state, nextLetter) match
-    case (Searching(acc), '(') if acc.endsWith("mul") => (prevElems, FactorA(""))
-    case (Searching(acc), '(') if acc.endsWith("don't") => (prevElems, DontStarted)
-    case (Searching(acc), '(') if acc.endsWith("do") => (prevElems, DoStarted)
-    case (Searching(acc), _) => (prevElems, Searching(acc + nextLetter))
+    case (Searching(acc), '(') if acc.endsWith("mul") => parser.copy(state = FactorA(""))
+    case (Searching(acc), '(') if acc.endsWith("don't") => parser.copy(state = DontStarted)
+    case (Searching(acc), '(') if acc.endsWith("do") => parser.copy(state = DoStarted)
+    case (Searching(acc), _) => parser.copy(state = Searching(acc + nextLetter))
 
-    case (DoStarted, ')') => (prevElems.appended(Do), Searching(""))
-    case (DontStarted, ')') => (prevElems.appended(Dont), Searching(""))
+    case (DoStarted, ')') => Parser(instructions.appended(Do), Searching(""))
+    case (DontStarted, ')') => Parser(instructions.appended(Dont), Searching(""))
 
-    case (FactorA(acc), _) if nextLetter.isDigit => (prevElems, FactorA(acc.appended(nextLetter)))
-    case (FactorA(acc), ',') => (prevElems, FactorB(acc.toInt, ""))
+    case (FactorA(acc), _) if nextLetter.isDigit => parser.copy(state = FactorA(acc.appended(nextLetter)))
+    case (FactorA(acc), ',') => parser.copy(state = FactorB(acc.toInt, ""))
 
-    case (FactorB(factorA, acc), _) if nextLetter.isDigit => (prevElems, FactorB(factorA, acc.appended(nextLetter)))
-    case (FactorB(factorA, acc), ')') => (prevElems.appended(Mul(factorA, acc.toInt)), Searching(""))
+    case (FactorB(factorA, acc), _) if nextLetter.isDigit => parser.copy(state = FactorB(factorA, acc.appended(nextLetter)))
+    case (FactorB(factorA, acc), ')') => Parser(instructions.appended(Mul(factorA, acc.toInt)), Searching(""))
 
-    case _ => (prevElems, Searching(""))
+    case _ => parser.copy(state = Searching(""))
